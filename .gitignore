@@ -1,0 +1,4 @@
+node_modules/
+.env
+.conversation-state.json
+/data/

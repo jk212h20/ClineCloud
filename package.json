@@ -1,0 +1,19 @@
+{
+  "name": "cline-cloud",
+  "version": "1.0.0",
+  "description": "Cloud-hosted Cline server — accepts tasks from websites, runs Cline CLI against project repos, pushes changes to GitHub",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "setup": "node setup-repos.js"
+  },
+  "keywords": ["cline", "cloud", "ai", "coding-assistant", "railway"],
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "express": "^5.1.0",
+    "ws": "^8.18.0"
+  }
+}

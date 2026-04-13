@@ -1,0 +1,8 @@
+[phases.setup]
+nixPkgs = ["...", "git"]
+
+[phases.install]
+cmds = ["npm ci", "npm install -g cline@2.14.0"]
+
+[start]
+cmd = "node server.js"
