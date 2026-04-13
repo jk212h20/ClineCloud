@@ -856,34 +856,18 @@ try {
   mkdirSync(REPOS_DIR, { recursive: true });
 } catch {}
 
-// Ensure git is available (nixpacks images may not have it)
-try {
-  execSync("git --version", { stdio: "pipe" });
-  console.log("[setup] git already available");
-} catch {
-  console.log("[setup] git not found — installing...");
-  try {
-    // Try apt-get (Debian/Ubuntu-based nixpacks images)
-    execSync("apt-get update && apt-get install -y git openssh-client", { stdio: "pipe", timeout: 120_000 });
-    console.log("[setup] git installed via apt-get");
-  } catch (e1) {
-    try {
-      // Try apk (Alpine-based images)
-      execSync("apk add --no-cache git openssh-client", { stdio: "pipe", timeout: 60_000 });
-      console.log("[setup] git installed via apk");
-    } catch (e2) {
-      console.error("[setup] FATAL: Could not install git. Clone/push will fail.");
-      console.error("[setup] apt-get error:", e1.message);
-      console.error("[setup] apk error:", e2.message);
-    }
-  }
-}
+// Note: git operations use isomorphic-git (pure JS) — no system git binary needed
+// System git is installed via Dockerfile for Cline CLI's own use
+console.log("[setup] Using isomorphic-git for clone/pull/push (no system git dependency)");
 
-// Configure git globally
+// Configure system git if available (for Cline CLI)
 try {
   execSync('git config --global user.email "cline@clinecloud.dev"', { stdio: "pipe" });
   execSync('git config --global user.name "ClineCloud"', { stdio: "pipe" });
-} catch {}
+  console.log("[setup] System git configured");
+} catch {
+  console.log("[setup] System git not available (isomorphic-git handles clone/push)");
+}
 
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`\n☁️  ClineCloud v1.0`);
