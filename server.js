@@ -15,7 +15,13 @@ import { WebSocketServer } from "ws";
 import { spawn, execSync } from "child_process";
 import { fileURLToPath } from "url";
 import { dirname, join, resolve } from "path";
-import { existsSync, readdirSync, statSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import fs from "fs";
+import http from "http";
+import https from "https";
+import git from "isomorphic-git";
+import gitHttp from "isomorphic-git/http/node/index.js";
+
+const { existsSync, readdirSync, statSync, mkdirSync, readFileSync, writeFileSync } = fs;
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -121,34 +127,58 @@ function getRepoDir(projectKey) {
   return join(REPOS_DIR, projectKey);
 }
 
-function gitCloneOrPull(repoUrl, projectKey) {
+// Auth helper for isomorphic-git
+function gitAuth() {
+  if (!GH_TOKEN) return {};
+  return {
+    onAuth: () => ({ username: GH_TOKEN, password: "x-oauth-basic" }),
+  };
+}
+
+async function gitCloneOrPull(repoUrl, projectKey) {
   const repoDir = getRepoDir(projectKey);
   
   if (existsSync(join(repoDir, ".git"))) {
-    // Pull latest
+    // Pull latest via fetch + checkout
     console.log(`[git] Pulling latest for ${projectKey}...`);
     try {
-      execSync("git pull --ff-only", { cwd: repoDir, timeout: 30_000, stdio: "pipe" });
+      await git.fetch({ fs, http: gitHttp, dir: repoDir, ...gitAuth() });
+      // Get the default branch
+      const branches = await git.listBranches({ fs, dir: repoDir, remote: "origin" });
+      const defaultBranch = branches.includes("main") ? "main" : branches.includes("master") ? "master" : branches[0];
+      // Fast-forward merge: checkout the remote branch
+      await git.checkout({ fs, dir: repoDir, ref: defaultBranch });
+      await git.merge({ fs, dir: repoDir, theirs: `origin/${defaultBranch}`, fastForward: true, author: { name: "ClineCloud", email: "cline@clinecloud.dev" } });
       console.log(`[git] Pull complete for ${projectKey}`);
     } catch (e) {
-      console.log(`[git] Pull failed for ${projectKey}: ${e.message}`);
-      // Try reset to remote
+      console.log(`[git] Pull failed for ${projectKey}: ${e.message}, trying hard reset...`);
       try {
-        execSync("git fetch origin && git reset --hard origin/main", { cwd: repoDir, timeout: 30_000, stdio: "pipe" });
-        console.log(`[git] Reset to origin/main for ${projectKey}`);
+        await git.fetch({ fs, http: gitHttp, dir: repoDir, ...gitAuth() });
+        const branches = await git.listBranches({ fs, dir: repoDir, remote: "origin" });
+        const defaultBranch = branches.includes("main") ? "main" : "master";
+        // Get the remote commit
+        const remoteRef = await git.resolveRef({ fs, dir: repoDir, ref: `refs/remotes/origin/${defaultBranch}` });
+        // Force checkout to that commit
+        await git.checkout({ fs, dir: repoDir, ref: defaultBranch, force: true });
+        console.log(`[git] Force checkout to origin/${defaultBranch} for ${projectKey}`);
       } catch (e2) {
         console.error(`[git] Reset also failed: ${e2.message}`);
       }
     }
   } else {
     // Clone
-    const authUrl = GH_TOKEN ? repoUrl.replace("https://", `https://${GH_TOKEN}@`) : repoUrl;
-    console.log(`[git] Cloning ${projectKey}...`);
+    console.log(`[git] Cloning ${projectKey} via isomorphic-git...`);
     try {
-      execSync(`git clone "${authUrl}" "${repoDir}"`, { timeout: 120_000, stdio: "pipe" });
-      // Set git config in the repo
-      execSync(`git config user.email "cline@clinecloud.dev"`, { cwd: repoDir, stdio: "pipe" });
-      execSync(`git config user.name "ClineCloud"`, { cwd: repoDir, stdio: "pipe" });
+      mkdirSync(repoDir, { recursive: true });
+      await git.clone({
+        fs,
+        http: gitHttp,
+        dir: repoDir,
+        url: repoUrl,
+        singleBranch: true,
+        depth: 1,
+        ...gitAuth(),
+      });
       console.log(`[git] Cloned ${projectKey}`);
     } catch (e) {
       console.error(`[git] Clone failed for ${projectKey}: ${e.message}`);
@@ -159,30 +189,40 @@ function gitCloneOrPull(repoUrl, projectKey) {
   return repoDir;
 }
 
-function gitPushChanges(repoDir, projectKey, taskSummary) {
+async function gitPushChanges(repoDir, projectKey, taskSummary) {
   try {
-    // Check for changes
-    const status = execSync("git status --porcelain", { cwd: repoDir, timeout: 10_000 }).toString().trim();
-    if (!status) {
+    // Check for changes using isomorphic-git statusMatrix
+    const matrix = await git.statusMatrix({ fs, dir: repoDir });
+    const changed = matrix.filter(([, head, workdir, stage]) => head !== 1 || workdir !== 1 || stage !== 1);
+    
+    if (changed.length === 0) {
       console.log(`[git] No changes to push for ${projectKey}`);
       return { pushed: false, reason: "no changes" };
     }
     
-    // Ensure remote uses auth token
-    if (GH_TOKEN) {
-      try {
-        const currentUrl = execSync("git remote get-url origin", { cwd: repoDir, timeout: 5_000 }).toString().trim();
-        if (!currentUrl.includes(GH_TOKEN)) {
-          const authUrl = currentUrl.replace("https://", `https://${GH_TOKEN}@`);
-          execSync(`git remote set-url origin "${authUrl}"`, { cwd: repoDir, stdio: "pipe" });
-        }
-      } catch {}
+    // Stage all changes
+    for (const [filepath, , workdir] of changed) {
+      if (workdir === 0) {
+        await git.remove({ fs, dir: repoDir, filepath });
+      } else {
+        await git.add({ fs, dir: repoDir, filepath });
+      }
     }
     
     const summary = (taskSummary || "ClineCloud task").substring(0, 72);
-    execSync("git add -A", { cwd: repoDir, timeout: 10_000, stdio: "pipe" });
-    execSync(`git commit -m "ClineCloud: ${summary}"`, { cwd: repoDir, timeout: 10_000, stdio: "pipe" });
-    execSync("git push origin HEAD", { cwd: repoDir, timeout: 60_000, stdio: "pipe" });
+    await git.commit({
+      fs,
+      dir: repoDir,
+      message: `ClineCloud: ${summary}`,
+      author: { name: "ClineCloud", email: "cline@clinecloud.dev" },
+    });
+    
+    await git.push({
+      fs,
+      http: gitHttp,
+      dir: repoDir,
+      ...gitAuth(),
+    });
     
     console.log(`[git] Pushed changes for ${projectKey}`);
     return { pushed: true };
@@ -236,7 +276,7 @@ app.get("/api/projects", (req, res) => {
 });
 
 // Register a project (called during setup)
-app.post("/api/projects", (req, res) => {
+app.post("/api/projects", async (req, res) => {
   const { key, repo, liveUrl, hotLoadUrl, description } = req.body;
   if (!key || !repo) return res.status(400).json({ error: "key and repo required" });
   
@@ -247,7 +287,7 @@ app.post("/api/projects", (req, res) => {
   // Clone immediately
   try {
     ensureReposDir();
-    gitCloneOrPull(repo, key);
+    await gitCloneOrPull(repo, key);
     res.json({ ok: true, repoDir: getRepoDir(key) });
   } catch (e) {
     res.status(500).json({ error: `Clone failed: ${e.message}` });
@@ -341,7 +381,7 @@ function sendState(ws) {
 // ---------------------------------------------------------------------------
 // Task submission
 // ---------------------------------------------------------------------------
-function handleSubmitTask(ws, msg) {
+async function handleSubmitTask(ws, msg) {
   const prompt = (msg.prompt || "").trim();
   if (!prompt) { ws.send(JSON.stringify({ type: "error", message: "Empty prompt" })); return; }
 
@@ -360,7 +400,7 @@ function handleSubmitTask(ws, msg) {
     // Ensure repo is cloned and up to date
     try {
       ensureReposDir();
-      cwd = gitCloneOrPull(proj.repo, projectKey);
+      cwd = await gitCloneOrPull(proj.repo, projectKey);
     } catch (e) {
       ws.send(JSON.stringify({ type: "error", message: `Git setup failed: ${e.message}` }));
       return;
@@ -537,7 +577,7 @@ function startTask(task) {
     broadcast({ type: "error-output", taskId: task.id, text });
   });
 
-  proc.on("close", (code) => {
+  proc.on("close", async (code) => {
     cleanup();
     flushStreamingText(task.id);
     
@@ -562,7 +602,7 @@ function startTask(task) {
     let pushResult = null;
     if (task.autoPush && task.projectKey && code === 0) {
       console.log(`[${task.id}] Auto-pushing changes for ${task.projectKey}...`);
-      pushResult = gitPushChanges(task.cwd, task.projectKey, task.prompt.substring(0, 72));
+      pushResult = await gitPushChanges(task.cwd, task.projectKey, task.prompt.substring(0, 72));
       if (pushResult.pushed) {
         broadcast({ type: "git-pushed", taskId: task.id, project: task.projectKey });
       }

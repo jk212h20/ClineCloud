@@ -9,11 +9,18 @@
     "dev": "node --watch server.js",
     "setup": "node setup-repos.js"
   },
-  "keywords": ["cline", "cloud", "ai", "coding-assistant", "railway"],
+  "keywords": [
+    "cline",
+    "cloud",
+    "ai",
+    "coding-assistant",
+    "railway"
+  ],
   "license": "MIT",
   "dependencies": {
     "dotenv": "^16.4.7",
     "express": "^5.1.0",
+    "isomorphic-git": "^1.37.5",
     "ws": "^8.18.0"
   }
 }
