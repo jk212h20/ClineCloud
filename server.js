@@ -263,8 +263,9 @@ app.use(express.json());
 
 app.get("/api/health", (_req, res) => res.json({
   status: "ok",
-  version: "1.0.0",
+  version: "1.2.0",
   type: "cline-cloud",
+  gitEngine: "isomorphic-git",
   activeTask: activeTask ? { id: activeTask.id, project: activeTask.projectKey } : null,
   queueLength: taskQueue.length,
 }));
