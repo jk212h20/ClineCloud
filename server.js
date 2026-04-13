@@ -815,6 +815,29 @@ try {
   mkdirSync(REPOS_DIR, { recursive: true });
 } catch {}
 
+// Ensure git is available (nixpacks images may not have it)
+try {
+  execSync("git --version", { stdio: "pipe" });
+  console.log("[setup] git already available");
+} catch {
+  console.log("[setup] git not found — installing...");
+  try {
+    // Try apt-get (Debian/Ubuntu-based nixpacks images)
+    execSync("apt-get update && apt-get install -y git openssh-client", { stdio: "pipe", timeout: 120_000 });
+    console.log("[setup] git installed via apt-get");
+  } catch (e1) {
+    try {
+      // Try apk (Alpine-based images)
+      execSync("apk add --no-cache git openssh-client", { stdio: "pipe", timeout: 60_000 });
+      console.log("[setup] git installed via apk");
+    } catch (e2) {
+      console.error("[setup] FATAL: Could not install git. Clone/push will fail.");
+      console.error("[setup] apt-get error:", e1.message);
+      console.error("[setup] apk error:", e2.message);
+    }
+  }
+}
+
 // Configure git globally
 try {
   execSync('git config --global user.email "cline@clinecloud.dev"', { stdio: "pipe" });
